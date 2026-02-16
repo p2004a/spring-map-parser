@@ -554,7 +554,15 @@ UTEX.DDS = {
 
         DDSCAPS_COMPLEX: 0x8,
         DDSCAPS_MIPMAP: 0x400000,
-        DDSCAPS_TEXTURE: 0x1000
+        DDSCAPS_TEXTURE: 0x1000,
+
+        DDSCAPS2_CUBEMAP: 0x200,
+        DDSCAPS2_CUBEMAP_POSITIVEX: 0x400,
+        DDSCAPS2_CUBEMAP_NEGATIVEX: 0x800,
+        DDSCAPS2_CUBEMAP_POSITIVEY: 0x1000,
+        DDSCAPS2_CUBEMAP_NEGATIVEY: 0x2000,
+        DDSCAPS2_CUBEMAP_POSITIVEZ: 0x4000,
+        DDSCAPS2_CUBEMAP_NEGATIVEZ: 0x8000
     },
 
     decode: function(buff) {
@@ -570,63 +578,92 @@ UTEX.DDS = {
         }
         //console.log(head, pf);
 
-        var w = head.width, h = head.height, out = [];
         var fmt = pf.fourCC, bc  = pf.bitCount;
+
+        var isCubemap = (head.caps2 & C.DDSCAPS2_CUBEMAP) !== 0;
+        var faceFlags = [
+            C.DDSCAPS2_CUBEMAP_POSITIVEX, C.DDSCAPS2_CUBEMAP_NEGATIVEX,
+            C.DDSCAPS2_CUBEMAP_POSITIVEY, C.DDSCAPS2_CUBEMAP_NEGATIVEY,
+            C.DDSCAPS2_CUBEMAP_POSITIVEZ, C.DDSCAPS2_CUBEMAP_NEGATIVEZ
+        ];
+        var faceCount = 1;
+        var facePresent = [true, false, false, false, false, false];
+        if (isCubemap) {
+            faceCount = 0;
+            for (var fi = 0; fi < 6; fi++) {
+                facePresent[fi] = (head.caps2 & faceFlags[fi]) !== 0;
+                if (facePresent[fi]) faceCount++;
+            }
+        }
 
         //var time = Date.now();
         var mcnt = Math.max(1, head.mmcount);
-        for (var it=0; it<mcnt; it++) {
-            var img = new Uint8Array(w * h * 4);
-            if (false) {} else if (fmt==="DXT1") {
-                offset=UTEX.readBC1(data, offset, img, w, h);
-            } else if (fmt==="DXT3") {
-                offset=UTEX.readBC2(data, offset, img, w, h);
-            } else if (fmt==="DXT5") {
-                offset=UTEX.readBC3(data, offset, img, w, h);
-            } else if (fmt==="DX10") {
-                offset=UTEX.readBC7(data, offset, img, w, h);
-            } else if (fmt==="ATC ") {
-                offset=UTEX.readATC(data, offset, img, w, h);
-            } else if (fmt==="ATCA") {
-                offset=UTEX.readATA(data, offset, img, w, h);
-            } else if (fmt==="ATCI") {
-                offset=UTEX.readATA(data, offset, img, w, h);
-            } else if ((pf.flags&C.DDPF_ALPHAPIXELS) && (pf.flags&C.DDPF_RGB)) {
-                if     (bc===32) {
-                    for (var i=0; i<img.length; i++) {
-                        img[i] = data[offset+i];
+        var faces = isCubemap ? [null, null, null, null, null, null] : [];
+        var faceIdx = 0;
+        for (var face = 0; face < faceCount; face++) {
+            var out = [];
+            var w = head.width, h = head.height;
+            for (var it=0; it<mcnt; it++) {
+                var img = new Uint8Array(w * h * 4);
+                if (false) {} else if (fmt==="DXT1") {
+                    offset=UTEX.readBC1(data, offset, img, w, h);
+                } else if (fmt==="DXT3") {
+                    offset=UTEX.readBC2(data, offset, img, w, h);
+                } else if (fmt==="DXT5") {
+                    offset=UTEX.readBC3(data, offset, img, w, h);
+                } else if (fmt==="DX10") {
+                    offset=UTEX.readBC7(data, offset, img, w, h);
+                } else if (fmt==="ATC ") {
+                    offset=UTEX.readATC(data, offset, img, w, h);
+                } else if (fmt==="ATCA") {
+                    offset=UTEX.readATA(data, offset, img, w, h);
+                } else if (fmt==="ATCI") {
+                    offset=UTEX.readATA(data, offset, img, w, h);
+                } else if ((pf.flags&C.DDPF_ALPHAPIXELS) && (pf.flags&C.DDPF_RGB)) {
+                    if     (bc===32) {
+                        for (var i=0; i<img.length; i++) {
+                            img[i] = data[offset+i];
+                        }
+                        offset+=img.length;
+                    } else if (bc===16) {
+                        for (var i=0; i<img.length; i+=4) {
+                            var clr = (data[offset+(i>>1)+1]<<8) | data[offset+(i>>1)];
+                            img[i+0] = 255*(clr&pf.RMask)/pf.RMask;
+                            img[i+1] = 255*(clr&pf.GMask)/pf.GMask;
+                            img[i+2] = 255*(clr&pf.BMask)/pf.BMask;
+                            img[i+3] = 255*(clr&pf.AMask)/pf.AMask;
+                        }
+                        offset+=(img.length>>1);
+                    } else {
+                        throw ("unknown bit count "+bc);
                     }
-                    offset+=img.length;
-                } else if (bc===16) {
-                    for (var i=0; i<img.length; i+=4) {
-                        var clr = (data[offset+(i>>1)+1]<<8) | data[offset+(i>>1)];
-                        img[i+0] = 255*(clr&pf.RMask)/pf.RMask;
-                        img[i+1] = 255*(clr&pf.GMask)/pf.GMask;
-                        img[i+2] = 255*(clr&pf.BMask)/pf.BMask;
-                        img[i+3] = 255*(clr&pf.AMask)/pf.AMask;
+                } else if ((pf.flags&C.DDPF_ALPHA) || (pf.flags&C.DDPF_ALPHAPIXELS) || (pf.flags&C.DDPF_LUMINANCE)) {
+                    if (bc===8)  {
+                        for (var i=0; i<img.length; i+=4) {
+                            img[i+3] = data[offset+(i>>2)];
+                        }
+                        offset+=(img.length>>2);
+                    } else {
+                        throw "unknown bit count "+bc;
                     }
-                    offset+=(img.length>>1);
                 } else {
-                    throw ("unknown bit count "+bc);
+                    console.log("unknown texture format, head flags: ", head.flags.toString(2), "pixelFormat flags: ", pf.flags.toString(2));
+                    throw "e";
                 }
-            } else if ((pf.flags&C.DDPF_ALPHA) || (pf.flags&C.DDPF_ALPHAPIXELS) || (pf.flags&C.DDPF_LUMINANCE)) {
-                if (bc===8)  {
-                    for (var i=0; i<img.length; i+=4) {
-                        img[i+3] = data[offset+(i>>2)];
-                    }
-                    offset+=(img.length>>2);
-                } else {
-                    throw "unknown bit count "+bc;
-                }
-            } else {
-                console.log("unknown texture format, head flags: ", head.flags.toString(2), "pixelFormat flags: ", pf.flags.toString(2));
-                throw "e";
+                out.push({width: w, height: h, image: img.buffer});
+                w = (w>>1);  h = (h>>1);
             }
-            out.push({width: w, height: h, image: img.buffer});
-            w = (w>>1);  h = (h>>1);
+            if (isCubemap) {
+                while (!facePresent[faceIdx]) faceIdx++;
+                faces[faceIdx] = out;
+                faceIdx++;
+            } else {
+                faces.push(out);
+            }
         }
         //console.log(Date.now()-time);  throw "e";
-        return out; //out.slice(0,1);
+        if (!isCubemap) return faces[0];
+        return { faces: faces, isCubemap: true };
     },
 
     encode: function(img, w, h) {
@@ -779,5 +816,7 @@ UTEX.PVR = {
 };
 
 module.exports = function(buffer) {
-    return UTEX.DDS.decode(buffer)[0];
+    var result = UTEX.DDS.decode(buffer);
+    if (result.isCubemap) return result;
+    return result[0];
 };
