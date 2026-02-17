@@ -554,7 +554,15 @@ UTEX.DDS = {
 
         DDSCAPS_COMPLEX: 0x8,
         DDSCAPS_MIPMAP: 0x400000,
-        DDSCAPS_TEXTURE: 0x1000
+        DDSCAPS_TEXTURE: 0x1000,
+
+        DDSCAPS2_CUBEMAP: 0x200,           // caps2 flags for cubemaps
+        DDSCAPS2_CUBEMAP_POSITIVEX: 0x400,
+        DDSCAPS2_CUBEMAP_NEGATIVEX: 0x800,
+        DDSCAPS2_CUBEMAP_POSITIVEY: 0x1000,
+        DDSCAPS2_CUBEMAP_NEGATIVEY: 0x2000,
+        DDSCAPS2_CUBEMAP_POSITIVEZ: 0x4000,
+        DDSCAPS2_CUBEMAP_NEGATIVEZ: 0x8000
     },
 
     decode: function(buff) {
@@ -573,57 +581,101 @@ UTEX.DDS = {
         var w = head.width, h = head.height, out = [];
         var fmt = pf.fourCC, bc  = pf.bitCount;
 
+        // Check if this is a cubemap and determine face count
+        var isCubemap = (head.caps2 & C.DDSCAPS2_CUBEMAP) !== 0;
+        var faceCount = 1;
+        if (isCubemap) {
+            // Count the number of cubemap faces by checking individual face flags
+            faceCount = 0;
+            if (head.caps2 & C.DDSCAPS2_CUBEMAP_POSITIVEX) faceCount++;
+            if (head.caps2 & C.DDSCAPS2_CUBEMAP_NEGATIVEX) faceCount++;
+            if (head.caps2 & C.DDSCAPS2_CUBEMAP_POSITIVEY) faceCount++;
+            if (head.caps2 & C.DDSCAPS2_CUBEMAP_NEGATIVEY) faceCount++;
+            if (head.caps2 & C.DDSCAPS2_CUBEMAP_POSITIVEZ) faceCount++;
+            if (head.caps2 & C.DDSCAPS2_CUBEMAP_NEGATIVEZ) faceCount++;
+        }
+
         //var time = Date.now();
-        var mcnt = Math.max(1, head.mmcount);
-        for (var it=0; it<mcnt; it++) {
-            var img = new Uint8Array(w * h * 4);
-            if (false) {} else if (fmt==="DXT1") {
-                offset=UTEX.readBC1(data, offset, img, w, h);
-            } else if (fmt==="DXT3") {
-                offset=UTEX.readBC2(data, offset, img, w, h);
-            } else if (fmt==="DXT5") {
-                offset=UTEX.readBC3(data, offset, img, w, h);
-            } else if (fmt==="DX10") {
-                offset=UTEX.readBC7(data, offset, img, w, h);
-            } else if (fmt==="ATC ") {
-                offset=UTEX.readATC(data, offset, img, w, h);
-            } else if (fmt==="ATCA") {
-                offset=UTEX.readATA(data, offset, img, w, h);
-            } else if (fmt==="ATCI") {
-                offset=UTEX.readATA(data, offset, img, w, h);
-            } else if ((pf.flags&C.DDPF_ALPHAPIXELS) && (pf.flags&C.DDPF_RGB)) {
-                if     (bc===32) {
-                    for (var i=0; i<img.length; i++) {
-                        img[i] = data[offset+i];
+        for (var faceIdx = 0; faceIdx < faceCount; faceIdx++) {
+            var fw = w, fh = h;
+            var mcnt = Math.max(1, head.mmcount);
+            for (var it=0; it<mcnt; it++) {
+                var img = new Uint8Array(fw * fh * 4);
+                if (fmt==="DXT1") {
+                    offset=UTEX.readBC1(data, offset, img, fw, fh);
+                } else if (fmt==="DXT3") {
+                    offset=UTEX.readBC2(data, offset, img, fw, fh);
+                } else if (fmt==="DXT5") {
+                    offset=UTEX.readBC3(data, offset, img, fw, fh);
+                } else if (fmt==="DX10") {
+                    offset=UTEX.readBC7(data, offset, img, fw, fh);
+                } else if (fmt==="ATC ") {
+                    offset=UTEX.readATC(data, offset, img, fw, fh);
+                } else if (fmt==="ATCA") {
+                    offset=UTEX.readATA(data, offset, img, fw, fh);
+                } else if (fmt==="ATCI") {
+                    offset=UTEX.readATA(data, offset, img, fw, fh);
+                } else if ((pf.flags&C.DDPF_ALPHAPIXELS) && (pf.flags&C.DDPF_RGB)) {
+                    if     (bc===32) {
+                        for (var i=0; i<img.length; i++) {
+                            img[i] = data[offset+i];
+                        }
+                        offset+=img.length;
+                    } else if (bc===16) {
+                        for (var i=0; i<img.length; i+=4) {
+                            var clr = (data[offset+(i>>1)+1]<<8) | data[offset+(i>>1)];
+                            img[i+0] = 255*(clr&pf.RMask)/pf.RMask;
+                            img[i+1] = 255*(clr&pf.GMask)/pf.GMask;
+                            img[i+2] = 255*(clr&pf.BMask)/pf.BMask;
+                            img[i+3] = 255*(clr&pf.AMask)/pf.AMask;
+                        }
+                        offset+=(img.length>>1);
+                    } else {
+                        throw ("unknown bit count "+bc);
                     }
-                    offset+=img.length;
-                } else if (bc===16) {
-                    for (var i=0; i<img.length; i+=4) {
-                        var clr = (data[offset+(i>>1)+1]<<8) | data[offset+(i>>1)];
-                        img[i+0] = 255*(clr&pf.RMask)/pf.RMask;
-                        img[i+1] = 255*(clr&pf.GMask)/pf.GMask;
-                        img[i+2] = 255*(clr&pf.BMask)/pf.BMask;
-                        img[i+3] = 255*(clr&pf.AMask)/pf.AMask;
+                } else if (pf.flags&C.DDPF_RGB) {
+                    // RGB without alpha channel (24-bit)
+                    if (bc===24) {
+                        for (var i=0; i<img.length; i+=4) {
+                            var idx = offset + (i>>2)*3;
+                            img[i+0] = data[idx+2];  // R
+                            img[i+1] = data[idx+1];  // G
+                            img[i+2] = data[idx+0];  // B
+                            img[i+3] = 255;          // A (fully opaque)
+                        }
+                        offset += (fw * fh * 3);
+                    } else if (bc===32) {
+                        // 32-bit RGB (with unused alpha or padding)
+                        for (var i=0; i<img.length; i+=4) {
+                            img[i+0] = data[offset+i+2];  // R
+                            img[i+1] = data[offset+i+1];  // G
+                            img[i+2] = data[offset+i+0];  // B
+                            img[i+3] = 255;               // A (fully opaque)
+                        }
+                        offset += img.length;
+                    } else {
+                        throw ("unknown bit count for RGB format: "+bc);
                     }
-                    offset+=(img.length>>1);
+                } else if ((pf.flags&C.DDPF_ALPHA) || (pf.flags&C.DDPF_ALPHAPIXELS) || (pf.flags&C.DDPF_LUMINANCE)) {
+                    if (bc===8)  {
+                        for (var i=0; i<img.length; i+=4) {
+                            img[i+3] = data[offset+(i>>2)];
+                        }
+                        offset+=(img.length>>2);
+                    } else {
+                        throw "unknown bit count "+bc;
+                    }
                 } else {
-                    throw ("unknown bit count "+bc);
+                    console.log("unknown texture format, head flags: ", head.flags.toString(2), "pixelFormat flags: ", pf.flags.toString(2));
+                    throw "e";
                 }
-            } else if ((pf.flags&C.DDPF_ALPHA) || (pf.flags&C.DDPF_ALPHAPIXELS) || (pf.flags&C.DDPF_LUMINANCE)) {
-                if (bc===8)  {
-                    for (var i=0; i<img.length; i+=4) {
-                        img[i+3] = data[offset+(i>>2)];
-                    }
-                    offset+=(img.length>>2);
-                } else {
-                    throw "unknown bit count "+bc;
+                // For cubemaps, only return the first mipmap level for each face
+                // For regular textures, only return the first mipmap level (backward compatibility)
+                if (it === 0) {
+                    out.push({width: fw, height: fh, image: img.buffer});
                 }
-            } else {
-                console.log("unknown texture format, head flags: ", head.flags.toString(2), "pixelFormat flags: ", pf.flags.toString(2));
-                throw "e";
+                fw = (fw>>1);  fh = (fh>>1);
             }
-            out.push({width: w, height: h, image: img.buffer});
-            w = (w>>1);  h = (h>>1);
         }
         //console.log(Date.now()-time);  throw "e";
         return out; //out.slice(0,1);
@@ -778,6 +830,5 @@ UTEX.PVR = {
     }
 };
 
-module.exports = function(buffer) {
-    return UTEX.DDS.decode(buffer)[0];
-};
+module.exports = UTEX.DDS.decode;
+
